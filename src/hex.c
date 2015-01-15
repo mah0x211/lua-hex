@@ -49,7 +49,8 @@ static int encode_lua( lua_State *L )
 {
     static const char dec2hex[16] = "0123456789abcdef";
     size_t len = 0;
-    const char *src = luaL_checklstring( L, 1, &len );
+    const char *str = luaL_checklstring( L, 1, &len );
+    const unsigned char *src = (const unsigned char*)str;
     // dest length must be greater than len*2 + 1(null-term)
     size_t dlen = len * 2;
     const char *dest = NULL;
