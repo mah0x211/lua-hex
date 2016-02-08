@@ -33,7 +33,7 @@
 #include <ctype.h>
 #include <lua.h>
 #include <lauxlib.h>
-
+#include "hexcodec.h"
 
 #define lstate_fn2tbl(L,k,v) do{ \
     lua_pushstring(L,k); \
@@ -47,30 +47,22 @@
 
 static int encode_lua( lua_State *L )
 {
-    static const char dec2hex[16] = "0123456789abcdef";
     size_t len = 0;
     const char *str = luaL_checklstring( L, 1, &len );
-    const unsigned char *src = (const unsigned char*)str;
     // dest length must be greater than len*2 + 1(null-term)
     size_t dlen = len * 2;
-    const char *dest = NULL;
-    unsigned char *ptr = NULL;
-    size_t i = 0;
-    
+    unsigned char *dest = NULL;
+
     // integer overflow or no-mem error
-    if( dlen < len || !( dest = pnalloc( dlen + 1, const char ) ) ){
+    if( dlen == SIZE_MAX || dlen < len ||
+        !( dest = pnalloc( dlen, unsigned char ) ) ){
         lua_pushnil( L );
         lua_pushstring( L, strerror( ENOMEM ) );
         return 2;
     }
-    
-    ptr = (unsigned char*)dest;
-    for(; i < len; i++ ){
-        *ptr++ = dec2hex[src[i] >> 4];
-        *ptr++ = dec2hex[src[i] & 0xf];
-    }
-    *ptr = 0;
-    lua_pushlstring( L, dest, dlen );
+
+    hex_encode( dest, (unsigned char*)str, len );
+    lua_pushlstring( L, (const char*)dest, dlen );
     pdealloc( dest );
     
     return 1;
@@ -79,63 +71,30 @@ static int encode_lua( lua_State *L )
 
 static int decode_lua( lua_State *L )
 {
-    static const char hex2dec[256] = {
-        -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 
-        -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 
-        -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 
-    //  0  1  2  3  4  5  6  7  8  9
-        0, 1, 2, 3, 4, 5, 6, 7, 8, 9, -1, -1, -1, -1, -1, -1, -1, 
-    //  A   B   C   D   E   F
-        10, 11, 12, 13, 14, 15, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 
-        -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 
-    //  a   b   c   d   e   f
-        10, 11, 12, 13, 14, 15,
-        -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 
-        -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 
-        -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 
-        -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 
-        -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 
-        -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 
-        -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 
-        -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 
-        -1, -1, -1, -1, -1, -1, -1, -1, -1
-    };
     size_t len = 0;
     unsigned char *src = (unsigned char*)luaL_checklstring( L, 1, &len );
-    size_t dlen = 0;
+    size_t dlen = len / 2;
     char *dest = NULL;
-    char *ptr = NULL;
-	size_t i = 0;
-    
-    // src length must be multiple of two
+
+    // check hex-encoded src length
     if( len % 2 ){
-        lua_pushnil( L );
-        lua_pushstring( L, strerror( EINVAL ) );
-        return 2;
+        errno = EINVAL;
     }
-    
-    // dest length must be greater than len/2 + 1(null-term)
-    dlen = len / 2;
-    if( !( dest = pnalloc( dlen + 1, char ) ) ){
-        lua_pushnil( L );
-        lua_pushstring( L, strerror( errno ) );
-        return 2;
-    }
-    
-    ptr = dest;
-    for(; i < len; i += 2 )
+    else if( ( dest = pnalloc( dlen, char ) ) )
     {
-        if( hex2dec[src[i]] == -1 || hex2dec[src[i+1]] == -1 ){
-            errno = EINVAL;
-            return -1;
+        if( hex_decode( dest, src, len ) == 0 ){
+            lua_pushlstring( L, dest, dlen );
+            pdealloc( dest );
+            return 1;
         }
-        *ptr++ = hex2dec[src[i]] << 4 | hex2dec[src[i+1]];
-	}
-	*ptr = 0;
-    lua_pushlstring( L, dest, dlen );
-    pdealloc( dest );
-    
-    return 1;
+        pdealloc( dest );
+    }
+
+    // got error
+    lua_pushnil( L );
+    lua_pushstring( L, strerror( errno ) );
+
+    return 2;
 }
 
 
