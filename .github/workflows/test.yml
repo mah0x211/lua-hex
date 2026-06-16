@@ -57,6 +57,7 @@ jobs:
       name: Install Tools
       run: |
         luarocks install testcase
+        luarocks install errno
     -
       name: Run Test
       run: |

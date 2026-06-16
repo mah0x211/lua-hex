@@ -1,5 +1,6 @@
 local testcase = require('testcase')
 local assert = require('assert')
+local errno = require('errno')
 local hex = require('hex')
 
 function testcase.encode()
@@ -29,4 +30,35 @@ function testcase.encode_and_decode()
     local enc = assert(hex.encode(src))
     local dec = assert(hex.decode(enc))
     assert.equal(dec, src)
+end
+
+function testcase.encode_and_decode_large_input()
+    -- ensure chunked processing works across LUAL_BUFFERSIZE boundaries
+    local src = string.rep('0123456789abcdef', 2048)
+    local enc = assert(hex.encode(src))
+    local dec = assert(hex.decode(enc))
+    assert.equal(dec, src)
+end
+
+function testcase.decode_illegal_byte_sequence()
+    -- test that decode returns nil, err for non-hex characters (EILSEQ)
+    local cases = {
+        -- both chars are non-hex
+        'zz',
+        -- second char is non-hex
+        '4g',
+        -- first char is non-hex
+        'g4',
+        -- spaces are non-hex (even length)
+        '  ',
+        -- uppercase non-hex
+        'GG',
+    }
+
+    for _, src in ipairs(cases) do
+        local dec, err, errnum = hex.decode(src)
+        assert.is_nil(dec)
+        assert.equal(errnum, errno.EILSEQ.code)
+        assert.equal(err, errno.EILSEQ.message)
+    end
 end

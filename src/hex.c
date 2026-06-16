@@ -49,51 +49,106 @@
 
 static int encode_lua(lua_State *L)
 {
-    size_t len          = 0;
-    const char *str     = luaL_checklstring(L, 1, &len);
+    size_t len      = 0;
+    const char *str = luaL_checklstring(L, 1, &len);
     // dest length must be greater than len*2 + 1(null-term)
-    size_t dlen         = len * 2;
-    unsigned char *dest = NULL;
+    size_t dlen     = len * 2;
+    char *dest      = NULL;
+    luaL_Buffer b   = {0};
 
     // integer overflow or no-mem error
-    if (dlen == SIZE_MAX || dlen < len ||
-        !(dest = pnalloc(dlen, unsigned char))) {
+    if (dlen == SIZE_MAX || dlen < len) {
         lua_pushnil(L);
         lua_pushstring(L, strerror(ENOMEM));
-        return 2;
+        lua_pushinteger(L, ENOMEM);
+        return 3;
     }
 
-    hex_encode(dest, (unsigned char *)str, len);
-    lua_pushlstring(L, (const char *)dest, dlen);
-    pdealloc(dest);
+    // allocate dest buffer and encode src to hex-encoded dest
+    luaL_buffinit(L, &b);
 
+#if LUA_VERSION_NUM >= 502
+    dest = luaL_prepbuffsize(&b, dlen);
+    hex_encode(dest, dlen, (char *)str, len);
+    luaL_addsize(&b, dlen);
+
+#else
+    do {
+        size_t used = 0;
+
+        dest = luaL_prepbuffer(&b);
+        used = hex_encode(dest, LUAL_BUFFERSIZE, (char *)str, len);
+        if (used == (size_t)-1) {
+            return luaL_error(L, "BUG: destination buffer is too small");
+        }
+        luaL_addsize(&b, used * 2);
+        str += used;
+        len -= used;
+    } while (len > 0);
+#endif
+
+    luaL_pushresult(&b);
     return 1;
 }
 
 static int decode_lua(lua_State *L)
 {
-    size_t len         = 0;
-    unsigned char *src = (unsigned char *)luaL_checklstring(L, 1, &len);
-    size_t dlen        = len / 2;
-    char *dest         = NULL;
+    size_t len      = 0;
+    const char *src = luaL_checklstring(L, 1, &len);
+    size_t dlen     = len / 2;
+    char *dest      = NULL;
+    luaL_Buffer b   = {0};
 
     // check hex-encoded src length
     if (len % 2) {
         errno = EINVAL;
-    } else if ((dest = pnalloc(dlen, char))) {
-        if (hex_decode(dest, src, len) == 0) {
-            lua_pushlstring(L, dest, dlen);
-            pdealloc(dest);
-            return 1;
-        }
-        pdealloc(dest);
+        lua_pushnil(L);
+        lua_pushstring(L, strerror(errno));
+        lua_pushinteger(L, errno);
+        return 3;
     }
 
-    // got error
-    lua_pushnil(L);
-    lua_pushstring(L, strerror(errno));
+    // allocate dest buffer and decode hex-encoded src to dest
+    luaL_buffinit(L, &b);
 
-    return 2;
+#if LUA_VERSION_NUM >= 502
+    dest = luaL_prepbuffsize(&b, dlen);
+    if (hex_decode(dest, dlen, (char *)src, len) == (size_t)-1) {
+        if (errno == EILSEQ) {
+            lua_pushnil(L);
+            lua_pushstring(L, strerror(errno));
+            lua_pushinteger(L, errno);
+            return 3;
+        }
+        // destination buffer too small should never happen here
+        return luaL_error(L, "BUG: destination buffer is too small");
+    }
+    luaL_addsize(&b, dlen);
+
+#else
+    dlen = LUAL_BUFFERSIZE;
+    do {
+        size_t used = 0;
+
+        dest = luaL_prepbuffer(&b);
+        used = hex_decode(dest, dlen, (char *)src, len);
+        if (used == (size_t)-1) {
+            if (errno == EILSEQ) {
+                lua_pushnil(L);
+                lua_pushstring(L, strerror(errno));
+                lua_pushinteger(L, errno);
+                return 3;
+            }
+            return luaL_error(L, "BUG: destination buffer is too small");
+        }
+        luaL_addsize(&b, used / 2);
+        src += used;
+        len -= used;
+    } while (len > 0);
+#endif
+
+    luaL_pushresult(&b);
+    return 1;
 }
 
 LUALIB_API int luaopen_hex(lua_State *L)
