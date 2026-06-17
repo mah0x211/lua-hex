@@ -1,8 +1,9 @@
 rockspec_format = "3.0"
 package = "hex"
-version = "scm-1"
+version = "1.1.0-1"
 source = {
     url = "git+https://github.com/mah0x211/lua-hex.git",
+    tag = "v1.1.0",
 }
 description = {
     summary = "hexadecimal encode/decode module",
